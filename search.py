@@ -6,32 +6,60 @@ from ollama import chat
 
 
 # -----------------------------
-# 1. Load embedding model
+# 1. Employee function/tool
+# -----------------------------
+
+def get_employee_leave(employee_id: str) -> int:
+    """
+    Get the remaining annual leave balance for an employee.
+
+    Args:
+        employee_id: The employee ID.
+
+    Returns:
+        The number of remaining leave days.
+    """
+
+    leave_balance = {
+        "101": 15,
+        "102": 10,
+        "103": 20
+    }
+
+    return leave_balance.get(employee_id, 0)
+
+
+# -----------------------------
+# 2. Load embedding model
 # -----------------------------
 
 model = SentenceTransformer("all-MiniLM-L6-v2")
 
 
 # -----------------------------
-# 2. Load PDF and create chunks
+# 3. Load PDF and create chunks
 # -----------------------------
 
-chunks = load_document("data/nimbus_retail_employee_policy.pdf")
+chunks = load_document(
+    "data/nimbus_retail_employee_policy.pdf"
+)
 
 print("Number of chunks:", len(chunks))
 
 
 # -----------------------------
-# 3. Convert chunks into vectors
+# 4. Convert chunks into vectors
 # -----------------------------
 
 embeddings = model.encode(chunks)
 
-embeddings = np.array(embeddings).astype("float32")
+embeddings = np.array(
+    embeddings
+).astype("float32")
 
 
 # -----------------------------
-# 4. Create FAISS index
+# 5. Create FAISS index
 # -----------------------------
 
 dimension = embeddings.shape[1]
@@ -40,36 +68,44 @@ index = faiss.IndexFlatL2(dimension)
 
 index.add(embeddings)
 
-print("Number of vectors stored:", index.ntotal)
+print(
+    "Number of vectors stored:",
+    index.ntotal
+)
 
 
 # -----------------------------
-# 5. Get user's question
+# 6. Get user's question
 # -----------------------------
 
 query = input("\nAsk your Question: ")
 
 
 # -----------------------------
-# 6. Convert question into vector
+# 7. Convert question into vector
 # -----------------------------
 
 query_embedding = model.encode([query])
 
-query_embedding = np.array(query_embedding).astype("float32")
+query_embedding = np.array(
+    query_embedding
+).astype("float32")
 
 
 # -----------------------------
-# 7. Retrieve Top-K chunks
+# 8. Retrieve Top-K chunks
 # -----------------------------
 
 k = 2
 
-distances, indices = index.search(query_embedding, k)
+distances, indices = index.search(
+    query_embedding,
+    k
+)
 
 
 # -----------------------------
-# 8. Build context
+# 9. Build context
 # -----------------------------
 
 retrieved_chunks = []
@@ -85,21 +121,29 @@ for i in range(k):
     print("Distance:", distances[0][i])
 
 
-context = "\n\n".join(retrieved_chunks)
+context = "\n\n".join(
+    retrieved_chunks
+)
 
 
 # -----------------------------
-# 9. Send context + question
-#    to Ollama
+# 10. Build prompt
 # -----------------------------
 
 prompt = f"""
-You are a helpful assistant answering questions about the provided document.
+You are a helpful employee assistant.
 
-Answer the user's question ONLY using the information in the context below.
+You can answer questions using the provided
+document context.
 
-If the answer is not present in the context, say:
-"I don't know based on the provided document."
+You also have access to a tool called
+get_employee_leave.
+
+Use get_employee_leave when the user asks
+about an employee's remaining leave balance.
+
+For questions about company policy, use
+the document context.
 
 Do not make up information.
 
@@ -111,20 +155,96 @@ Question:
 """
 
 
+# -----------------------------
+# 11. Create messages
+# -----------------------------
+
+messages = [
+    {
+        "role": "user",
+        "content": prompt
+    }
+]
+
+
+# -----------------------------
+# 12. Ask LLM
+# -----------------------------
+
 response = chat(
     model="llama3.2:3b",
-    messages=[
-        {
-            "role": "user",
-            "content": prompt
-        }
-    ]
+    messages=messages,
+    tools=[get_employee_leave]
 )
 
 
 # -----------------------------
-# 10. Display grounded answer
+# 13. Check for tool calls
 # -----------------------------
 
-print("\n--- Grounded Answer ---")
-print(response.message.content)
+if response.message.tool_calls:
+
+    # Add LLM's tool-call message
+    messages.append(response.message)
+
+    for tool in response.message.tool_calls:
+
+        if tool.function.name == "get_employee_leave":
+
+            print("\n--- Tool Calling ---")
+
+            print(
+                "Tool:",
+                tool.function.name
+            )
+
+            print(
+                "Arguments:",
+                tool.function.arguments
+            )
+
+            # Execute Python function
+            result = get_employee_leave(
+                **tool.function.arguments
+            )
+
+            print(
+                "Tool result:",
+                result
+            )
+
+            # Send result back to LLM
+            messages.append(
+                {
+                    "role": "tool",
+                    "content": str(result),
+                    "tool_name": tool.function.name
+                }
+            )
+
+
+    # -----------------------------
+    # 14. Ask LLM for final answer
+    # -----------------------------
+
+    final_response = chat(
+        model="llama3.2:3b",
+        messages=messages,
+        tools=[get_employee_leave]
+    )
+
+    print("\n--- Final Answer ---")
+
+    print(
+        final_response.message.content
+    )
+
+
+else:
+
+    # No tool needed
+    print("\n--- Grounded Answer ---")
+
+    print(
+        response.message.content
+    )
